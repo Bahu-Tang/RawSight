@@ -378,8 +378,8 @@ class CameraService(private val context: Context) {
         )
         if (state.focusMode == FocusMode.MF) {
             // 0.0 = near (high diopter), 1.0 = infinity (0 diopter)
-            val diopter = (1.0f - state.focusDistance) * 5.0f
-            set(CaptureRequest.LENS_FOCUS_DISTANCE, diopter)
+            val minFocusD = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 5.0f
+            set(CaptureRequest.LENS_FOCUS_DISTANCE, (1.0f - state.focusDistance) * minFocusD)
         }
 
         // EV compensation (works even in CONTROL_MODE_AUTO)
@@ -393,15 +393,19 @@ class CameraService(private val context: Context) {
         val evSteps = ((state.evCompensation / (evStepNum / evStepDen)).toInt()).coerceIn(lower, upper)
         set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evSteps)
 
-        // Digital zoom
+        // Digital zoom (always set, reset to full array at 1.0x)
         val pixelArray = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-        if (pixelArray != null && state.zoomLevel > 1.0f) {
-            val cropW = (pixelArray.width() / state.zoomLevel).toInt()
-            val cropH = (pixelArray.height() / state.zoomLevel).toInt()
-            val cropL = pixelArray.left + (pixelArray.width() - cropW) / 2
-            val cropT = pixelArray.top + (pixelArray.height() - cropH) / 2
-            set(CaptureRequest.SCALER_CROP_REGION,
-                android.graphics.Rect(cropL, cropT, cropL + cropW, cropT + cropH))
+        if (pixelArray != null) {
+            if (state.zoomLevel > 1.0f) {
+                val cropW = (pixelArray.width() / state.zoomLevel).toInt()
+                val cropH = (pixelArray.height() / state.zoomLevel).toInt()
+                val cropL = pixelArray.left + (pixelArray.width() - cropW) / 2
+                val cropT = pixelArray.top + (pixelArray.height() - cropH) / 2
+                set(CaptureRequest.SCALER_CROP_REGION,
+                    android.graphics.Rect(cropL, cropT, cropL + cropW, cropT + cropH))
+            } else {
+                set(CaptureRequest.SCALER_CROP_REGION, pixelArray)
+            }
         }
     }
 

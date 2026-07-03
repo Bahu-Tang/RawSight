@@ -57,7 +57,6 @@ fun CameraScreen(
     val cameraState by cameraService.cameraState.collectAsState()
     val decisionReport by decisionEngine.report.collectAsState()
 
-    var showFullControls by remember { mutableStateOf(false) }
     var captureMsg by remember { mutableStateOf<String?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
 
@@ -167,8 +166,7 @@ fun CameraScreen(
                 cameraService.updateParameter(p, m, iso, ss, wb, f, fd, ev, null, null)
             },
             onTint = { tint -> cameraService.updateParameter(CameraParam.WHITE_BALANCE, null, null, null, null, null, null, null, tint, null) },
-            onZoom = { zoom -> cameraService.updateParameter(CameraParam.EV_COMPENSATION, null, null, null, null, null, null, null, null, zoom) },
-            onExpand = { showFullControls = !showFullControls }
+            onZoom = { zoom -> cameraService.updateParameter(CameraParam.EV_COMPENSATION, null, null, null, null, null, null, null, null, zoom) }
         )
 
         // ═══════════ Shutter ═══════════
@@ -232,18 +230,6 @@ fun CameraScreen(
         }
     }
 
-    // Bottom sheet for full controls
-    if (showFullControls) {
-        BottomSheetPanel(
-            cameraState = cameraState,
-            settingsEngine = settingsEngine,
-            onParamChange = { p, m, iso, ss, wb, f, fd, ev ->
-                cameraService.updateParameter(p, m, iso, ss, wb, f, fd, ev)
-            },
-            onDismiss = { showFullControls = false }
-        )
-    }
-
     DisposableEffect(Unit) { onDispose { cameraService.stopPreview() } }
 }
 
@@ -257,8 +243,7 @@ private fun ParamSlider(
     onActiveParam: (CameraParam) -> Unit,
     onParam: (CameraParam, ControlMode, Int?, ShutterSpeed?, Int?, FocusMode?, Float?, Float?) -> Unit,
     onTint: (Float) -> Unit,
-    onZoom: (Float) -> Unit,
-    onExpand: () -> Unit
+    onZoom: (Float) -> Unit
 ) {
     val allParams = listOf(CameraParam.ISO, CameraParam.SHUTTER_SPEED, CameraParam.WHITE_BALANCE, CameraParam.FOCUS, CameraParam.EV_COMPENSATION, CameraParam.SHUTTER_SPEED /* ZOOM placeholder */)
     val uniqueParams = allParams.distinct()
@@ -409,8 +394,6 @@ private fun ParamSlider(
             Text("ZOOM", color = if (isZoom) Color(0xFF4CAF50) else Color.Gray,
                 fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = if (isZoom) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { zoomActive = !zoomActive; onActiveParam(tabParams.first()) }.padding(horizontal = 6.dp, vertical = 2.dp))
-            Text("...", color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-                modifier = Modifier.clickable { onExpand() }.padding(horizontal = 4.dp))
         }
     }
 }
@@ -447,7 +430,7 @@ private fun TextureView.applyCropTransform(cameraService: CameraService) {
         val bufRect = android.graphics.RectF(0f, 0f, ps.height.toFloat(), ps.width.toFloat())
         val cx = viewRect.centerX(); val cy = viewRect.centerY()
         bufRect.offset(cx - bufRect.centerX(), cy - bufRect.centerY())
-        matrix.setRectToRect(viewRect, bufRect, Matrix.ScaleToFit.FILL)
+        matrix.setRectToRect(viewRect, bufRect, Matrix.ScaleToFit.CENTER)
     } else {
         val bufRect = android.graphics.RectF(0f, 0f, ps.width.toFloat(), ps.height.toFloat())
         matrix.setRectToRect(viewRect, bufRect, Matrix.ScaleToFit.CENTER)

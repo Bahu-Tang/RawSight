@@ -166,21 +166,53 @@ class CaptureController(
             set(CaptureRequest.SENSOR_SENSITIVITY, state.iso.coerceIn(isoRange?.lower ?: 64, isoRange?.upper ?: 6400))
             set(CaptureRequest.SENSOR_EXPOSURE_TIME, state.shutterSpeed.nanos.coerceIn(exposureRange?.lower ?: 125_000L, exposureRange?.upper ?: 30_000_000_000L))
         }
+
+        // White balance (matches CameraService)
         if (state.wbMode == ControlMode.AUTO) {
             set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
         } else {
             set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
-            val r = state.whiteBalance / 5000f
-            set(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector((1f / r).coerceIn(0.5f, 2f), 1f, 1f, r.coerceIn(0.5f, 2f)))
+            set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            // Same gains + tint as preview
+            val ratio = state.whiteBalance / 5000f
+            val red = (1f / ratio).coerceIn(0.6f, 1.4f)
+            val blue = ratio.coerceIn(0.6f, 1.4f)
+            val tf = (state.wbTint / 50f).coerceIn(-1f, 1f)
+            val g1 = (1f - tf * 0.2f).coerceIn(0.8f, 1.2f)
+            val g2 = (1f + tf * 0.2f).coerceIn(0.8f, 1.2f)
+            set(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(red, g1, g2, blue))
         }
-        set(CaptureRequest.CONTROL_AF_MODE, if (state.focusMode == FocusMode.AF) CaptureRequest.CONTROL_AF_MODE_AUTO else CaptureRequest.CONTROL_AF_MODE_OFF)
-        if (state.focusMode == FocusMode.MF) set(CaptureRequest.LENS_FOCUS_DISTANCE, state.focusDistance.coerceIn(0f, 1f))
 
+        // Focus (matches CameraService — diopter mapping)
+        val minFocusD = cameraCharacteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+            ?: 5.0f
+        set(CaptureRequest.CONTROL_AF_MODE, if (state.focusMode == FocusMode.AF) CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE else CaptureRequest.CONTROL_AF_MODE_OFF)
+        if (state.focusMode == FocusMode.MF) {
+            set(CaptureRequest.LENS_FOCUS_DISTANCE, (1.0f - state.focusDistance) * minFocusD)
+        }
+
+        // EV
         val evRange = cameraCharacteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
         val evStep = cameraCharacteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) ?: Rational(1, 3)
         val ev = ((state.evCompensation / (evStep.numerator.toFloat() / evStep.denominator)).toInt())
             .coerceIn(evRange?.lower ?: -4, evRange?.upper ?: 4)
         set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev)
+
+        // Digital zoom (always set, reset at 1.0x)
+        val pixelArray = cameraCharacteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        if (pixelArray != null) {
+            if (state.zoomLevel > 1.0f) {
+                val cw = (pixelArray.width() / state.zoomLevel).toInt()
+                val ch = (pixelArray.height() / state.zoomLevel).toInt()
+                val cl = pixelArray.left + (pixelArray.width() - cw) / 2
+                val ct = pixelArray.top + (pixelArray.height() - ch) / 2
+                set(CaptureRequest.SCALER_CROP_REGION, android.graphics.Rect(cl, ct, cl + cw, ct + ch))
+            } else {
+                set(CaptureRequest.SCALER_CROP_REGION, pixelArray)
+            }
+        }
+
         set(CaptureRequest.JPEG_ORIENTATION, sensorOrientation)
     }
 
