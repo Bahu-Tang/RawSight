@@ -96,11 +96,14 @@ data class CameraState(
 
     val whiteBalance: Int = WbValues.DEFAULT_AUTO,
     val wbMode: ControlMode = ControlMode.AUTO,
+    val wbTint: Float = 0f, // -50 .. +50 (green ← 0 → magenta)
 
     val focusMode: FocusMode = FocusMode.AF,
     val focusDistance: Float = 0f, // 0.0 (near) .. 1.0 (infinity)
     val focusControlMode: ControlMode = ControlMode.AUTO,
 
     val evCompensation: Float = EvValues.DEFAULT_AUTO,
-    val evMode: ControlMode = ControlMode.AUTO
+    val evMode: ControlMode = ControlMode.AUTO,
+
+    val zoomLevel: Float = 1.0f // 1.0x .. maxDigitalZoom
 )

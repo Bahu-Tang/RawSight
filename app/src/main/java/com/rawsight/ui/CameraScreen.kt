@@ -164,8 +164,10 @@ fun CameraScreen(
             activeParam = activeParam,
             onActiveParam = { activeParam = it },
             onParam = { p, m, iso, ss, wb, f, fd, ev ->
-                cameraService.updateParameter(p, m, iso, ss, wb, f, fd, ev)
+                cameraService.updateParameter(p, m, iso, ss, wb, f, fd, ev, null, null)
             },
+            onTint = { tint -> cameraService.updateParameter(CameraParam.WHITE_BALANCE, null, null, null, null, null, null, null, tint, null) },
+            onZoom = { zoom -> cameraService.updateParameter(CameraParam.EV_COMPENSATION, null, null, null, null, null, null, null, null, zoom) },
             onExpand = { showFullControls = !showFullControls }
         )
 
@@ -254,9 +256,12 @@ private fun ParamSlider(
     activeParam: CameraParam,
     onActiveParam: (CameraParam) -> Unit,
     onParam: (CameraParam, ControlMode, Int?, ShutterSpeed?, Int?, FocusMode?, Float?, Float?) -> Unit,
+    onTint: (Float) -> Unit,
+    onZoom: (Float) -> Unit,
     onExpand: () -> Unit
 ) {
-    val params = listOf(CameraParam.ISO, CameraParam.SHUTTER_SPEED, CameraParam.WHITE_BALANCE, CameraParam.FOCUS, CameraParam.EV_COMPENSATION)
+    val allParams = listOf(CameraParam.ISO, CameraParam.SHUTTER_SPEED, CameraParam.WHITE_BALANCE, CameraParam.FOCUS, CameraParam.EV_COMPENSATION, CameraParam.SHUTTER_SPEED /* ZOOM placeholder */)
+    val uniqueParams = allParams.distinct()
     val paramLabels = mapOf(
         CameraParam.ISO to "ISO", CameraParam.SHUTTER_SPEED to "SPD",
         CameraParam.WHITE_BALANCE to "WB", CameraParam.FOCUS to "FOC",
@@ -272,41 +277,44 @@ private fun ParamSlider(
         else -> true
     }
 
-    // Discrete steps
-    val steps: List<Float> = when (activeParam) {
-        CameraParam.ISO -> IsoValues.values.map { it.toFloat() }
-        CameraParam.SHUTTER_SPEED -> ShutterValues.values.indices.map { it.toFloat() }
-        CameraParam.WHITE_BALANCE -> WbValues.values.map { it.toFloat() }
-        CameraParam.FOCUS -> listOf(0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 0.7f, 1.0f)
-        CameraParam.EV_COMPENSATION -> (-4..4).map { it / 2f } // -2.0 .. +2.0 in 0.5 steps
+    // ZOOM is always manual
+    var zoomActive by remember { mutableStateOf(false) }
+    val isZoom = zoomActive
+    val sliderEnabled = isZoom || !isAuto
+
+    val steps: List<Float> = when {
+        isZoom -> (10..50).map { it / 10f } // 1.0x to 5.0x
+        activeParam == CameraParam.ISO -> IsoValues.values.map { it.toFloat() }
+        activeParam == CameraParam.SHUTTER_SPEED -> ShutterValues.values.indices.map { it.toFloat() }
+        activeParam == CameraParam.WHITE_BALANCE -> WbValues.values.map { it.toFloat() }
+        activeParam == CameraParam.FOCUS -> listOf(0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 0.7f, 1.0f)
+        activeParam == CameraParam.EV_COMPENSATION -> (-4..4).map { it / 2f }
         else -> listOf(0f)
     }
 
-    val curIdx: Int = when (activeParam) {
-        CameraParam.ISO -> IsoValues.values.indexOf(cameraState.iso).coerceAtLeast(0)
-        CameraParam.SHUTTER_SPEED -> ShutterValues.values.indexOf(cameraState.shutterSpeed).coerceAtLeast(0)
-        CameraParam.WHITE_BALANCE -> WbValues.values.indexOf(cameraState.whiteBalance).coerceAtLeast(0)
-        CameraParam.FOCUS -> {
+    val curIdx: Int = when {
+        isZoom -> ((cameraState.zoomLevel * 10f).roundToInt() - 10).coerceIn(0, steps.size - 1)
+        activeParam == CameraParam.ISO -> IsoValues.values.indexOf(cameraState.iso).coerceAtLeast(0)
+        activeParam == CameraParam.SHUTTER_SPEED -> ShutterValues.values.indexOf(cameraState.shutterSpeed).coerceAtLeast(0)
+        activeParam == CameraParam.WHITE_BALANCE -> WbValues.values.indexOf(cameraState.whiteBalance).coerceAtLeast(0)
+        activeParam == CameraParam.FOCUS -> {
             val fd = cameraState.focusDistance
-            when {
-                fd <= 0.05f -> 0; fd <= 0.15f -> 1; fd <= 0.25f -> 2; fd <= 0.4f -> 3
-                fd <= 0.6f -> 4; fd <= 0.85f -> 5; else -> 6
-            }
+            when { fd <= 0.05f -> 0; fd <= 0.15f -> 1; fd <= 0.25f -> 2; fd <= 0.4f -> 3; fd <= 0.6f -> 4; fd <= 0.85f -> 5; else -> 6 }
         }
-        CameraParam.EV_COMPENSATION -> ((cameraState.evCompensation * 2f).roundToInt() + 4).coerceIn(0, 8)
+        activeParam == CameraParam.EV_COMPENSATION -> ((cameraState.evCompensation * 2f).roundToInt() + 4).coerceIn(0, 8)
         else -> 0
     }
 
-    val displayF: String = when (activeParam) {
-        CameraParam.ISO -> cameraState.iso.toString()
-        CameraParam.SHUTTER_SPEED -> cameraState.shutterSpeed.display
-        CameraParam.WHITE_BALANCE -> "${cameraState.whiteBalance}K"
-        CameraParam.FOCUS -> if (cameraState.focusMode == FocusMode.AF) "AF" else String.format("%.1f", cameraState.focusDistance)
-        CameraParam.EV_COMPENSATION -> String.format("%+.1f", cameraState.evCompensation)
+    val displayF: String = when {
+        isZoom -> String.format("%.1fx", cameraState.zoomLevel)
+        activeParam == CameraParam.ISO -> cameraState.iso.toString()
+        activeParam == CameraParam.SHUTTER_SPEED -> cameraState.shutterSpeed.display
+        activeParam == CameraParam.WHITE_BALANCE -> "${cameraState.whiteBalance}K"
+        activeParam == CameraParam.FOCUS -> if (cameraState.focusMode == FocusMode.AF) "AF" else String.format("%.1f", cameraState.focusDistance)
+        activeParam == CameraParam.EV_COMPENSATION -> String.format("%+.1f", cameraState.evCompensation)
         else -> "?"
     }
 
-    // EV disabled in manual exposure mode
     val evDisabledNote = (activeParam == CameraParam.EV_COMPENSATION &&
         (cameraState.isoMode == ControlMode.MANUAL || cameraState.shutterMode == ControlMode.MANUAL))
 
@@ -317,77 +325,95 @@ private fun ParamSlider(
                 modifier = Modifier.width(64.dp))
 
             if (evDisabledNote) {
-                Text("EV needs AUTO exposure", color = Color(0xFFFFC107), fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                Text("EV needs AUTO exp", color = Color(0xFFFFC107), fontSize = 10.sp, fontFamily = FontFamily.Monospace,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
             } else {
-                var sliderIdx by remember(curIdx, isAuto) { mutableIntStateOf(curIdx) }
+                var sliderIdx by remember(curIdx) { mutableIntStateOf(curIdx) }
                 Slider(
                     value = sliderIdx.toFloat(),
                     onValueChange = { sliderIdx = it.toInt().coerceIn(0, steps.size - 1) },
                     onValueChangeFinished = {
-                        if (!isAuto) {
-                            when (activeParam) {
-                                CameraParam.ISO -> onParam(activeParam, cameraState.isoMode, steps[sliderIdx].toInt(), null, null, null, null, null)
-                                CameraParam.SHUTTER_SPEED -> {
-                                    val ss = ShutterValues.values[sliderIdx.coerceIn(0, ShutterValues.values.size - 1)]
-                                    onParam(activeParam, cameraState.shutterMode, null, ss, null, null, null, null)
-                                }
-                                CameraParam.WHITE_BALANCE -> onParam(activeParam, cameraState.wbMode, null, null, steps[sliderIdx].toInt(), null, null, null)
-                                CameraParam.FOCUS -> {
-                                    val fm = if (cameraState.focusControlMode == ControlMode.AUTO) FocusMode.AF else FocusMode.MF
-                                    onParam(activeParam, cameraState.focusControlMode, null, null, null, fm, steps[sliderIdx], null)
-                                }
-                                CameraParam.EV_COMPENSATION -> onParam(activeParam, cameraState.evMode, null, null, null, null, null, steps[sliderIdx])
-                                else -> {}
+                        when {
+                            isZoom -> onZoom(steps[sliderIdx])
+                            activeParam == CameraParam.ISO && !isAuto -> onParam(activeParam, cameraState.isoMode, steps[sliderIdx].toInt(), null, null, null, null, null)
+                            activeParam == CameraParam.SHUTTER_SPEED && !isAuto -> {
+                                val ss = ShutterValues.values[sliderIdx.coerceIn(0, ShutterValues.values.size - 1)]
+                                onParam(activeParam, cameraState.shutterMode, null, ss, null, null, null, null)
                             }
+                            activeParam == CameraParam.WHITE_BALANCE && !isAuto -> onParam(activeParam, cameraState.wbMode, null, null, steps[sliderIdx].toInt(), null, null, null)
+                            activeParam == CameraParam.FOCUS && !isAuto -> {
+                                val fm = if (cameraState.focusControlMode == ControlMode.AUTO) FocusMode.AF else FocusMode.MF
+                                onParam(activeParam, cameraState.focusControlMode, null, null, null, fm, steps[sliderIdx], null)
+                            }
+                            activeParam == CameraParam.EV_COMPENSATION && !isAuto -> onParam(activeParam, cameraState.evMode, null, null, null, null, null, steps[sliderIdx])
                         }
                     },
                     valueRange = 0f..(steps.size - 1).toFloat(),
-                    enabled = !isAuto,
-                    steps = 0,
+                    enabled = sliderEnabled,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color(0xFF4CAF50),
-                        activeTrackColor = Color(0xFF4CAF50),
-                        inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
-                    )
+                    colors = SliderDefaults.colors(thumbColor = Color(0xFF4CAF50), activeTrackColor = Color(0xFF4CAF50), inactiveTrackColor = Color.Gray.copy(alpha = 0.3f))
                 )
             }
 
-            // AUTO / MANUAL toggle
-            Text(
-                if (isAuto) "AUTO" else "MANUAL",
-                color = if (isAuto) Color.Gray else Color(0xFF4CAF50),
-                fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clickable {
-                    when (activeParam) {
-                        CameraParam.ISO -> { settingsEngine.toggleMode(CameraParam.ISO); onParam(CameraParam.ISO, settingsEngine.getMode(CameraParam.ISO), cameraState.iso, null, null, null, null, null) }
-                        CameraParam.SHUTTER_SPEED -> { settingsEngine.toggleMode(CameraParam.SHUTTER_SPEED); onParam(CameraParam.SHUTTER_SPEED, settingsEngine.getMode(CameraParam.SHUTTER_SPEED), null, cameraState.shutterSpeed, null, null, null, null) }
-                        CameraParam.WHITE_BALANCE -> { settingsEngine.toggleMode(CameraParam.WHITE_BALANCE); onParam(CameraParam.WHITE_BALANCE, settingsEngine.getMode(CameraParam.WHITE_BALANCE), null, null, cameraState.whiteBalance, null, null, null) }
-                        CameraParam.FOCUS -> { settingsEngine.toggleMode(CameraParam.FOCUS); onParam(CameraParam.FOCUS, settingsEngine.getMode(CameraParam.FOCUS), null, null, null, cameraState.focusMode, cameraState.focusDistance, null) }
-                        CameraParam.EV_COMPENSATION -> { settingsEngine.toggleMode(CameraParam.EV_COMPENSATION); onParam(CameraParam.EV_COMPENSATION, settingsEngine.getMode(CameraParam.EV_COMPENSATION), null, null, null, null, null, cameraState.evCompensation) }
-                        else -> {}
-                    }
-                }.padding(horizontal = 8.dp, vertical = 4.dp)
-                    .background(if (isAuto) Color.Transparent else Color(0xFF4CAF50).copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-            )
+            // AUTO/MANUAL (not for zoom)
+            if (!isZoom) {
+                Text(
+                    if (isAuto) "AUTO" else "MANUAL",
+                    color = if (isAuto) Color.Gray else Color(0xFF4CAF50),
+                    fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        when (activeParam) {
+                            CameraParam.ISO -> { settingsEngine.toggleMode(CameraParam.ISO); onParam(CameraParam.ISO, settingsEngine.getMode(CameraParam.ISO), cameraState.iso, null, null, null, null, null) }
+                            CameraParam.SHUTTER_SPEED -> { settingsEngine.toggleMode(CameraParam.SHUTTER_SPEED); onParam(CameraParam.SHUTTER_SPEED, settingsEngine.getMode(CameraParam.SHUTTER_SPEED), null, cameraState.shutterSpeed, null, null, null, null) }
+                            CameraParam.WHITE_BALANCE -> { settingsEngine.toggleMode(CameraParam.WHITE_BALANCE); onParam(CameraParam.WHITE_BALANCE, settingsEngine.getMode(CameraParam.WHITE_BALANCE), null, null, cameraState.whiteBalance, null, null, null) }
+                            CameraParam.FOCUS -> { settingsEngine.toggleMode(CameraParam.FOCUS); onParam(CameraParam.FOCUS, settingsEngine.getMode(CameraParam.FOCUS), null, null, null, cameraState.focusMode, cameraState.focusDistance, null) }
+                            CameraParam.EV_COMPENSATION -> { settingsEngine.toggleMode(CameraParam.EV_COMPENSATION); onParam(CameraParam.EV_COMPENSATION, settingsEngine.getMode(CameraParam.EV_COMPENSATION), null, null, null, null, null, cameraState.evCompensation) }
+                            else -> {}
+                        }
+                    }.padding(horizontal = 8.dp, vertical = 4.dp)
+                        .background(if (isAuto) Color.Transparent else Color(0xFF4CAF50).copy(alpha = 0.2f), RoundedCornerShape(6.dp))
+                )
+            }
         }
 
-        // Param selector tabs
-        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            params.forEach { p ->
-                val active = p == activeParam
-                Text(paramLabels[p] ?: "?", color = if (active) Color(0xFF4CAF50) else Color.Gray,
-                    fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { onActiveParam(p) }.padding(horizontal = 8.dp, vertical = 2.dp))
+        // Tint slider (only when WB is selected)
+        if (activeParam == CameraParam.WHITE_BALANCE && !isAuto) {
+            val tintSteps = (-5..5).map { it * 10f } // -50..+50
+            val tintIdx = ((cameraState.wbTint / 10f).roundToInt() + 5).coerceIn(0, 10)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                Text("Tint", color = if (cameraState.wbTint != 0f) Color(0xFF4CAF50) else Color.Gray,
+                    fontSize = 10.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.width(64.dp))
+                Text(String.format("%+.0f", cameraState.wbTint), color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.width(32.dp))
+                var tIdx by remember(tintIdx) { mutableIntStateOf(tintIdx) }
+                Slider(
+                    value = tIdx.toFloat(), onValueChange = { tIdx = it.toInt().coerceIn(0, 10) },
+                    onValueChangeFinished = { onTint(tintSteps[tIdx]) },
+                    valueRange = 0f..10f,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    colors = SliderDefaults.colors(thumbColor = Color(0xFF64B5F6), activeTrackColor = Color(0xFF64B5F6), inactiveTrackColor = Color.Gray.copy(alpha = 0.3f))
+                )
             }
-            Text("...", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+        }
+
+        // Param tabs
+        val tabParams = listOf(CameraParam.ISO, CameraParam.SHUTTER_SPEED, CameraParam.WHITE_BALANCE, CameraParam.FOCUS, CameraParam.EV_COMPENSATION)
+        val tabLabels = paramLabels + ("ZOOM" to "ZOOM") // hack to add ZOOM tab
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            tabParams.forEach { p ->
+                val active = p == activeParam && !isZoom
+                Text(tabLabels[p] ?: "?", color = if (active) Color(0xFF4CAF50) else Color.Gray,
+                    fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { onActiveParam(p) }.padding(horizontal = 6.dp, vertical = 2.dp))
+            }
+            // ZOOM tab
+            Text("ZOOM", color = if (isZoom) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = if (isZoom) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { zoomActive = !zoomActive; onActiveParam(tabParams.first()) }.padding(horizontal = 6.dp, vertical = 2.dp))
+            Text("...", color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
                 modifier = Modifier.clickable { onExpand() }.padding(horizontal = 4.dp))
         }
     }
 }
-
-// ── Slider param chip (replaces old ParamStrip) ──
 
 @Composable
 private fun LensBadge(label: String, active: Boolean, onClick: () -> Unit) {

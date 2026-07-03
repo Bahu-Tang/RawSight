@@ -174,10 +174,12 @@ class CameraService(private val context: Context) {
         wbValue: Int? = null,
         focusMode: FocusMode? = null,
         focusDistance: Float? = null,
-        evValue: Float? = null
+        evValue: Float? = null,
+        tintValue: Float? = null,
+        zoomValue: Float? = null
     ) {
         _cameraState.value = _cameraState.value.run {
-            when (param) {
+            val updated = when (param) {
                 CameraParam.ISO -> copy(
                     iso = isoValue ?: iso,
                     isoMode = mode ?: isoMode
@@ -188,7 +190,8 @@ class CameraService(private val context: Context) {
                 )
                 CameraParam.WHITE_BALANCE -> copy(
                     whiteBalance = wbValue ?: whiteBalance,
-                    wbMode = mode ?: wbMode
+                    wbMode = mode ?: wbMode,
+                    wbTint = tintValue ?: wbTint
                 )
                 CameraParam.FOCUS -> copy(
                     focusMode = focusMode ?: this.focusMode,
@@ -200,6 +203,7 @@ class CameraService(private val context: Context) {
                     evMode = mode ?: evMode
                 )
             }
+            if (zoomValue != null) updated.copy(zoomLevel = zoomValue) else updated
         }
         rebuildPreviewRequest()
     }
@@ -359,10 +363,11 @@ class CameraService(private val context: Context) {
         // White balance
         if (state.wbMode == ControlMode.AUTO) {
             set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
         } else {
             set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
             set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-            set(CaptureRequest.COLOR_CORRECTION_GAINS, approximateGains(state.whiteBalance))
+            set(CaptureRequest.COLOR_CORRECTION_GAINS, approximateGains(state.whiteBalance, state.wbTint))
         }
 
         // Focus
@@ -372,7 +377,9 @@ class CameraService(private val context: Context) {
             else CaptureRequest.CONTROL_AF_MODE_OFF
         )
         if (state.focusMode == FocusMode.MF) {
-            set(CaptureRequest.LENS_FOCUS_DISTANCE, state.focusDistance.coerceIn(0f, 1f))
+            // 0.0 = near (high diopter), 1.0 = infinity (0 diopter)
+            val diopter = (1.0f - state.focusDistance) * 5.0f
+            set(CaptureRequest.LENS_FOCUS_DISTANCE, diopter)
         }
 
         // EV compensation (works even in CONTROL_MODE_AUTO)
@@ -385,6 +392,17 @@ class CameraService(private val context: Context) {
         val evStepDen = evStep.denominator.toFloat()
         val evSteps = ((state.evCompensation / (evStepNum / evStepDen)).toInt()).coerceIn(lower, upper)
         set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evSteps)
+
+        // Digital zoom
+        val pixelArray = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        if (pixelArray != null && state.zoomLevel > 1.0f) {
+            val cropW = (pixelArray.width() / state.zoomLevel).toInt()
+            val cropH = (pixelArray.height() / state.zoomLevel).toInt()
+            val cropL = pixelArray.left + (pixelArray.width() - cropW) / 2
+            val cropT = pixelArray.top + (pixelArray.height() - cropH) / 2
+            set(CaptureRequest.SCALER_CROP_REGION,
+                android.graphics.Rect(cropL, cropT, cropL + cropW, cropT + cropH))
+        }
     }
 
     // ──────────────────────────────────────────────────
@@ -407,11 +425,16 @@ class CameraService(private val context: Context) {
      * Simple white-balance gain approximation from Kelvin temperature.
      * Produces an [RggbChannelVector] with red and blue gains relative to green.
      */
-    private fun approximateGains(kelvin: Int): RggbChannelVector {
+    private fun approximateGains(kelvin: Int, tint: Float): RggbChannelVector {
+        // Color temperature → R/G and B/G gains (softer range: 0.6–1.4)
         val ratio = kelvin / 5000f
-        val redGain = (1f / ratio).coerceIn(0.5f, 2.0f)
-        val blueGain = ratio.coerceIn(0.5f, 2.0f)
-        return RggbChannelVector(redGain, 1f, 1f, blueGain)
+        val red = (1f / ratio).coerceIn(0.6f, 1.4f)
+        val blue = ratio.coerceIn(0.6f, 1.4f)
+        // Tint: ±50 → adjust green1/green2 balance; positive = magenta (less green2), negative = green
+        val tintFactor = (tint / 50f).coerceIn(-1f, 1f)
+        val g1 = (1f - tintFactor * 0.2f).coerceIn(0.8f, 1.2f)
+        val g2 = (1f + tintFactor * 0.2f).coerceIn(0.8f, 1.2f)
+        return RggbChannelVector(red, g1, g2, blue)
     }
 
     /**
