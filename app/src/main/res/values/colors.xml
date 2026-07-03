@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="rawsight_green">#FF4CAF50</color>
+    <color name="rawsight_yellow">#FFFFC107</color>
+    <color name="rawsight_red">#FFFF5252</color>
+    <color name="rawsight_blue_cold">#8064B5F6</color>
+    <color name="rawsight_white">#FFFFFFFF</color>
+    <color name="rawsight_overlay_grid">#18FFFFFF</color>
+    <color name="rawsight_overlay_bbox">#CCFFFFFF</color>
+    <color name="rawsight_hud_bg">#80000000</color>
+</resources>
