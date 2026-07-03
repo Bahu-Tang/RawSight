@@ -256,74 +256,103 @@ private fun ParamSlider(
     onParam: (CameraParam, ControlMode, Int?, ShutterSpeed?, Int?, FocusMode?, Float?, Float?) -> Unit,
     onExpand: () -> Unit
 ) {
-    val params = listOf(CameraParam.ISO, CameraParam.SHUTTER_SPEED, CameraParam.WHITE_BALANCE, CameraParam.EV_COMPENSATION)
+    val params = listOf(CameraParam.ISO, CameraParam.SHUTTER_SPEED, CameraParam.WHITE_BALANCE, CameraParam.FOCUS, CameraParam.EV_COMPENSATION)
     val paramLabels = mapOf(
-        CameraParam.ISO to "ISO",
-        CameraParam.SHUTTER_SPEED to "SPD",
-        CameraParam.WHITE_BALANCE to "WB",
+        CameraParam.ISO to "ISO", CameraParam.SHUTTER_SPEED to "SPD",
+        CameraParam.WHITE_BALANCE to "WB", CameraParam.FOCUS to "FOC",
         CameraParam.EV_COMPENSATION to "EV"
     )
 
-    // Current value & range for active param
     val isAuto = when (activeParam) {
         CameraParam.ISO -> cameraState.isoMode == ControlMode.AUTO
         CameraParam.SHUTTER_SPEED -> cameraState.shutterMode == ControlMode.AUTO
         CameraParam.WHITE_BALANCE -> cameraState.wbMode == ControlMode.AUTO
+        CameraParam.FOCUS -> cameraState.focusControlMode == ControlMode.AUTO
         CameraParam.EV_COMPENSATION -> cameraState.evMode == ControlMode.AUTO
         else -> true
     }
 
-    val (minF, maxF, curF, displayF) = paramRange(cameraState, activeParam)
+    // Discrete steps
+    val steps: List<Float> = when (activeParam) {
+        CameraParam.ISO -> IsoValues.values.map { it.toFloat() }
+        CameraParam.SHUTTER_SPEED -> ShutterValues.values.indices.map { it.toFloat() }
+        CameraParam.WHITE_BALANCE -> WbValues.values.map { it.toFloat() }
+        CameraParam.FOCUS -> listOf(0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 0.7f, 1.0f)
+        CameraParam.EV_COMPENSATION -> (-4..4).map { it / 2f } // -2.0 .. +2.0 in 0.5 steps
+        else -> listOf(0f)
+    }
+
+    val curIdx: Int = when (activeParam) {
+        CameraParam.ISO -> IsoValues.values.indexOf(cameraState.iso).coerceAtLeast(0)
+        CameraParam.SHUTTER_SPEED -> ShutterValues.values.indexOf(cameraState.shutterSpeed).coerceAtLeast(0)
+        CameraParam.WHITE_BALANCE -> WbValues.values.indexOf(cameraState.whiteBalance).coerceAtLeast(0)
+        CameraParam.FOCUS -> {
+            val fd = cameraState.focusDistance
+            when {
+                fd <= 0.05f -> 0; fd <= 0.15f -> 1; fd <= 0.25f -> 2; fd <= 0.4f -> 3
+                fd <= 0.6f -> 4; fd <= 0.85f -> 5; else -> 6
+            }
+        }
+        CameraParam.EV_COMPENSATION -> ((cameraState.evCompensation * 2f).roundToInt() + 4).coerceIn(0, 8)
+        else -> 0
+    }
+
+    val displayF: String = when (activeParam) {
+        CameraParam.ISO -> cameraState.iso.toString()
+        CameraParam.SHUTTER_SPEED -> cameraState.shutterSpeed.display
+        CameraParam.WHITE_BALANCE -> "${cameraState.whiteBalance}K"
+        CameraParam.FOCUS -> if (cameraState.focusMode == FocusMode.AF) "AF" else String.format("%.1f", cameraState.focusDistance)
+        CameraParam.EV_COMPENSATION -> String.format("%+.1f", cameraState.evCompensation)
+        else -> "?"
+    }
+
+    // EV disabled in manual exposure mode
+    val evDisabledNote = (activeParam == CameraParam.EV_COMPENSATION &&
+        (cameraState.isoMode == ControlMode.MANUAL || cameraState.shutterMode == ControlMode.MANUAL))
 
     Column(modifier = modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp)).padding(8.dp)) {
         // Slider row
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Value display
             Text(displayF, color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
-                modifier = Modifier.width(72.dp))
+                modifier = Modifier.width(64.dp))
 
-            // Slider
-            var sliderVal by remember(curF, isAuto) { mutableFloatStateOf(curF) }
-            Slider(
-                value = sliderVal,
-                onValueChange = {
-                    sliderVal = it
-                },
-                onValueChangeFinished = {
-                    if (!isAuto) {
-                        val v = sliderVal
-                        val valToSet = when (activeParam) {
-                            CameraParam.ISO -> v.toInt()
-                            CameraParam.SHUTTER_SPEED -> {
-                                val idx = ((v / (maxF - minF) * (ShutterValues.values.size - 1)).toInt()).coerceIn(0, ShutterValues.values.size - 1)
-                                val ss = ShutterValues.values[idx]
-                                onParam(activeParam, cameraState.shutterMode, null, ss, null, null, null, null)
-                                return@Slider
+            if (evDisabledNote) {
+                Text("EV needs AUTO exposure", color = Color(0xFFFFC107), fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+            } else {
+                var sliderIdx by remember(curIdx, isAuto) { mutableIntStateOf(curIdx) }
+                Slider(
+                    value = sliderIdx.toFloat(),
+                    onValueChange = { sliderIdx = it.toInt().coerceIn(0, steps.size - 1) },
+                    onValueChangeFinished = {
+                        if (!isAuto) {
+                            when (activeParam) {
+                                CameraParam.ISO -> onParam(activeParam, cameraState.isoMode, steps[sliderIdx].toInt(), null, null, null, null, null)
+                                CameraParam.SHUTTER_SPEED -> {
+                                    val ss = ShutterValues.values[sliderIdx.coerceIn(0, ShutterValues.values.size - 1)]
+                                    onParam(activeParam, cameraState.shutterMode, null, ss, null, null, null, null)
+                                }
+                                CameraParam.WHITE_BALANCE -> onParam(activeParam, cameraState.wbMode, null, null, steps[sliderIdx].toInt(), null, null, null)
+                                CameraParam.FOCUS -> {
+                                    val fm = if (cameraState.focusControlMode == ControlMode.AUTO) FocusMode.AF else FocusMode.MF
+                                    onParam(activeParam, cameraState.focusControlMode, null, null, null, fm, steps[sliderIdx], null)
+                                }
+                                CameraParam.EV_COMPENSATION -> onParam(activeParam, cameraState.evMode, null, null, null, null, null, steps[sliderIdx])
+                                else -> {}
                             }
-                            CameraParam.WHITE_BALANCE -> v.toInt()
-                            CameraParam.EV_COMPENSATION -> {
-                                val ev = (v * 2f).roundToInt() / 2f
-                                onParam(activeParam, cameraState.evMode, null, null, null, null, null, ev)
-                                return@Slider
-                            }
-                            else -> v.toInt()
                         }
-                        when (activeParam) {
-                            CameraParam.ISO -> onParam(activeParam, cameraState.isoMode, valToSet, null, null, null, null, null)
-                            CameraParam.WHITE_BALANCE -> onParam(activeParam, cameraState.wbMode, null, null, valToSet, null, null, null)
-                            else -> {}
-                        }
-                    }
-                },
-                valueRange = minF..maxF,
-                enabled = !isAuto,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFF4CAF50),
-                    activeTrackColor = Color(0xFF4CAF50),
-                    inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
+                    },
+                    valueRange = 0f..(steps.size - 1).toFloat(),
+                    enabled = !isAuto,
+                    steps = 0,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF4CAF50),
+                        activeTrackColor = Color(0xFF4CAF50),
+                        inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
+                    )
                 )
-            )
+            }
 
             // AUTO / MANUAL toggle
             Text(
@@ -335,6 +364,7 @@ private fun ParamSlider(
                         CameraParam.ISO -> { settingsEngine.toggleMode(CameraParam.ISO); onParam(CameraParam.ISO, settingsEngine.getMode(CameraParam.ISO), cameraState.iso, null, null, null, null, null) }
                         CameraParam.SHUTTER_SPEED -> { settingsEngine.toggleMode(CameraParam.SHUTTER_SPEED); onParam(CameraParam.SHUTTER_SPEED, settingsEngine.getMode(CameraParam.SHUTTER_SPEED), null, cameraState.shutterSpeed, null, null, null, null) }
                         CameraParam.WHITE_BALANCE -> { settingsEngine.toggleMode(CameraParam.WHITE_BALANCE); onParam(CameraParam.WHITE_BALANCE, settingsEngine.getMode(CameraParam.WHITE_BALANCE), null, null, cameraState.whiteBalance, null, null, null) }
+                        CameraParam.FOCUS -> { settingsEngine.toggleMode(CameraParam.FOCUS); onParam(CameraParam.FOCUS, settingsEngine.getMode(CameraParam.FOCUS), null, null, null, cameraState.focusMode, cameraState.focusDistance, null) }
                         CameraParam.EV_COMPENSATION -> { settingsEngine.toggleMode(CameraParam.EV_COMPENSATION); onParam(CameraParam.EV_COMPENSATION, settingsEngine.getMode(CameraParam.EV_COMPENSATION), null, null, null, null, null, cameraState.evCompensation) }
                         else -> {}
                     }
@@ -344,48 +374,18 @@ private fun ParamSlider(
         }
 
         // Param selector tabs
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             params.forEach { p ->
                 val active = p == activeParam
-                Text(
-                    paramLabels[p] ?: "?",
-                    color = if (active) Color(0xFF4CAF50) else Color.Gray,
+                Text(paramLabels[p] ?: "?", color = if (active) Color(0xFF4CAF50) else Color.Gray,
                     fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { onActiveParam(p) }.padding(horizontal = 8.dp, vertical = 2.dp)
-                )
+                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { onActiveParam(p) }.padding(horizontal = 8.dp, vertical = 2.dp))
             }
             Text("...", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
                 modifier = Modifier.clickable { onExpand() }.padding(horizontal = 4.dp))
         }
     }
 }
-
-private fun paramRange(state: CameraState, param: CameraParam): Pair4 {
-    return when (param) {
-        CameraParam.ISO -> Pair4(
-            IsoValues.values.first().toFloat(), IsoValues.values.last().toFloat(),
-            state.iso.toFloat(), state.iso.toString()
-        )
-        CameraParam.SHUTTER_SPEED -> Pair4(
-            0f, (ShutterValues.values.size - 1).toFloat(),
-            ShutterValues.values.indexOf(state.shutterSpeed).toFloat(),
-            state.shutterSpeed.display
-        )
-        CameraParam.WHITE_BALANCE -> Pair4(
-            WbValues.values.first().toFloat(), WbValues.values.last().toFloat(),
-            state.whiteBalance.toFloat(), "${state.whiteBalance}K"
-        )
-        CameraParam.EV_COMPENSATION -> Pair4(
-            -2f, 2f, state.evCompensation, String.format("%+.1f", state.evCompensation)
-        )
-        else -> Pair4(0f, 100f, 0f, "0")
-    }
-}
-
-private data class Pair4(val first: Float, val second: Float, val third: Float, val fourth: String)
 
 // ── Slider param chip (replaces old ParamStrip) ──
 
@@ -422,8 +422,6 @@ private fun TextureView.applyCropTransform(cameraService: CameraService) {
         val cx = viewRect.centerX(); val cy = viewRect.centerY()
         bufRect.offset(cx - bufRect.centerX(), cy - bufRect.centerY())
         matrix.setRectToRect(viewRect, bufRect, Matrix.ScaleToFit.FILL)
-        val s = max(vh / ps.height.toFloat(), vw / ps.width.toFloat())
-        matrix.postScale(s, s, cx, cy)
     } else {
         val bufRect = android.graphics.RectF(0f, 0f, ps.width.toFloat(), ps.height.toFloat())
         matrix.setRectToRect(viewRect, bufRect, Matrix.ScaleToFit.CENTER)
