@@ -82,7 +82,6 @@ fun CameraScreen(
             AndroidView(
                 factory = { ctx ->
                     TextureView(ctx).also { textureView = it }.apply {
-                        val self = this
                         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                                 cameraService.startPreview(Surface(st))
@@ -90,9 +89,6 @@ fun CameraScreen(
                             override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
                             override fun onSurfaceTextureDestroyed(st: SurfaceTexture) = true
                             override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                        }
-                        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-                            self.applyCropTransform(cameraService)
                         }
                     }
                 },
@@ -272,13 +268,14 @@ private fun ParamSlider(
         activeParam == CameraParam.ISO -> IsoValues.values.map { it.toFloat() }
         activeParam == CameraParam.SHUTTER_SPEED -> ShutterValues.values.indices.map { it.toFloat() }
         activeParam == CameraParam.WHITE_BALANCE -> WbValues.values.map { it.toFloat() }
-        activeParam == CameraParam.FOCUS -> listOf(0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 0.7f, 1.0f)
+        activeParam ==         CameraParam.FOCUS -> listOf(-1f) // "continuous" signal
         activeParam == CameraParam.EV_COMPENSATION -> (-4..4).map { it / 2f }
         else -> listOf(0f)
     }
 
     val curIdx: Int = when {
         isZoom -> ((cameraState.zoomLevel * 10f).roundToInt() - 10).coerceIn(0, steps.size - 1)
+        steps.firstOrNull() == -1f -> 0 // continuous, not index-based
         activeParam == CameraParam.ISO -> IsoValues.values.indexOf(cameraState.iso).coerceAtLeast(0)
         activeParam == CameraParam.SHUTTER_SPEED -> ShutterValues.values.indexOf(cameraState.shutterSpeed).coerceAtLeast(0)
         activeParam == CameraParam.WHITE_BALANCE -> WbValues.values.indexOf(cameraState.whiteBalance).coerceAtLeast(0)
@@ -295,7 +292,7 @@ private fun ParamSlider(
         activeParam == CameraParam.ISO -> cameraState.iso.toString()
         activeParam == CameraParam.SHUTTER_SPEED -> cameraState.shutterSpeed.display
         activeParam == CameraParam.WHITE_BALANCE -> "${cameraState.whiteBalance}K"
-        activeParam == CameraParam.FOCUS -> if (cameraState.focusMode == FocusMode.AF) "AF" else String.format("%.1f", cameraState.focusDistance)
+        activeParam ==         CameraParam.FOCUS -> if (cameraState.focusMode == FocusMode.AF) "AF" else String.format("%.2f", cameraState.focusDistance)
         activeParam == CameraParam.EV_COMPENSATION -> String.format("%+.1f", cameraState.evCompensation)
         else -> "?"
     }
@@ -313,31 +310,46 @@ private fun ParamSlider(
                 Text("EV needs AUTO exp", color = Color(0xFFFFC107), fontSize = 10.sp, fontFamily = FontFamily.Monospace,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
             } else {
-                var sliderIdx by remember(curIdx) { mutableIntStateOf(curIdx) }
-                Slider(
-                    value = sliderIdx.toFloat(),
-                    onValueChange = { sliderIdx = it.toInt().coerceIn(0, steps.size - 1) },
-                    onValueChangeFinished = {
-                        when {
-                            isZoom -> onZoom(steps[sliderIdx])
-                            activeParam == CameraParam.ISO && !isAuto -> onParam(activeParam, cameraState.isoMode, steps[sliderIdx].toInt(), null, null, null, null, null)
-                            activeParam == CameraParam.SHUTTER_SPEED && !isAuto -> {
-                                val ss = ShutterValues.values[sliderIdx.coerceIn(0, ShutterValues.values.size - 1)]
-                                onParam(activeParam, cameraState.shutterMode, null, ss, null, null, null, null)
-                            }
-                            activeParam == CameraParam.WHITE_BALANCE && !isAuto -> onParam(activeParam, cameraState.wbMode, null, null, steps[sliderIdx].toInt(), null, null, null)
-                            activeParam == CameraParam.FOCUS && !isAuto -> {
+                val isContinuous = steps.firstOrNull() == -1f
+                if (isContinuous && activeParam == CameraParam.FOCUS) {
+                    // Continuous focus slider
+                    var focusVal by remember(cameraState.focusDistance) { mutableFloatStateOf(cameraState.focusDistance) }
+                    Slider(
+                        value = focusVal, onValueChange = { focusVal = it },
+                        onValueChangeFinished = {
+                            if (!isAuto) {
                                 val fm = if (cameraState.focusControlMode == ControlMode.AUTO) FocusMode.AF else FocusMode.MF
-                                onParam(activeParam, cameraState.focusControlMode, null, null, null, fm, steps[sliderIdx], null)
+                                onParam(activeParam, cameraState.focusControlMode, null, null, null, fm, focusVal, null)
                             }
-                            activeParam == CameraParam.EV_COMPENSATION && !isAuto -> onParam(activeParam, cameraState.evMode, null, null, null, null, null, steps[sliderIdx])
-                        }
-                    },
-                    valueRange = 0f..(steps.size - 1).toFloat(),
-                    enabled = sliderEnabled,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    colors = SliderDefaults.colors(thumbColor = Color(0xFF4CAF50), activeTrackColor = Color(0xFF4CAF50), inactiveTrackColor = Color.Gray.copy(alpha = 0.3f))
-                )
+                        },
+                        valueRange = 0f..1f, enabled = sliderEnabled,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        colors = SliderDefaults.colors(thumbColor = Color(0xFF4CAF50), activeTrackColor = Color(0xFF4CAF50), inactiveTrackColor = Color.Gray.copy(alpha = 0.3f))
+                    )
+                } else {
+                    // Discrete step slider
+                    var sliderIdx by remember(curIdx) { mutableIntStateOf(curIdx) }
+                    Slider(
+                        value = sliderIdx.toFloat(),
+                        onValueChange = { sliderIdx = it.toInt().coerceIn(0, steps.size - 1) },
+                        onValueChangeFinished = {
+                            when {
+                                isZoom -> onZoom(steps[sliderIdx])
+                                activeParam == CameraParam.ISO && !isAuto -> onParam(activeParam, cameraState.isoMode, steps[sliderIdx].toInt(), null, null, null, null, null)
+                                activeParam == CameraParam.SHUTTER_SPEED && !isAuto -> {
+                                    val ss = ShutterValues.values[sliderIdx.coerceIn(0, ShutterValues.values.size - 1)]
+                                    onParam(activeParam, cameraState.shutterMode, null, ss, null, null, null, null)
+                                }
+                                activeParam == CameraParam.WHITE_BALANCE && !isAuto -> onParam(activeParam, cameraState.wbMode, null, null, steps[sliderIdx].toInt(), null, null, null)
+                                activeParam == CameraParam.EV_COMPENSATION && !isAuto -> onParam(activeParam, cameraState.evMode, null, null, null, null, null, steps[sliderIdx])
+                            }
+                        },
+                        valueRange = 0f..(steps.size - 1).toFloat(),
+                        enabled = sliderEnabled,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        colors = SliderDefaults.colors(thumbColor = Color(0xFF4CAF50), activeTrackColor = Color(0xFF4CAF50), inactiveTrackColor = Color.Gray.copy(alpha = 0.3f))
+                    )
+                }
             }
 
             // AUTO/MANUAL (not for zoom)
